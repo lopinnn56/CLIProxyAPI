@@ -19,17 +19,25 @@ jobs:
 
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest 已预装 Android SDK (/usr/local/lib/android/sdk)，
+      # 不再使用 android-actions/setup-android@v3（其默认 packages: tools 已废弃，会报 Failed to find package 'tools'）。
+      - name: Setup Android SDK (预装SDK + 安装API34组件)
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          ls /usr/local/lib/android/sdk/cmdline-tools/ || true
+          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT
+          yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -85,24 +93,28 @@ jobs:
   release:
     name: 发布 Release
     needs: build
-    # 只有打 tag (v*) 或手动触发且在 main 分支时才发布，PR 不发布
+    # 只有打 tag (v*) 时才发布，PR 不发布
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout 代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android SDK (预装SDK + 安装API34组件)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" --sdk_root=$ANDROID_SDK_ROOT
+          yes | sdkmanager --licenses --sdk_root=$ANDROID_SDK_ROOT || true
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
