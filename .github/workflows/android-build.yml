@@ -1,0 +1,134 @@
+name: Android Build
+
+# 触发条件：push到main、PR、手动触发、打tag(v*)时自动发版
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Gradle 版本信息
+        run: ./gradlew --version
+
+      - name: 运行单元测试
+        run: ./gradlew test --stacktrace
+        continue-on-error: true
+
+      - name: 构建 Lite Release (1.2MB 轻量版)
+        run: ./gradlew assembleLiteRelease --stacktrace
+
+      - name: 构建 Full Release (50MB 完整版)
+        run: ./gradlew assembleFullRelease --stacktrace
+
+      - name: 构建 Debug 包
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: 列出产物
+        if: always()
+        run: |
+          echo "=== APK outputs ==="
+          find app/build/outputs/apk -type f -name "*.apk" | sort
+          ls -lh app/build/outputs/apk/lite/release/ || true
+          ls -lh app/build/outputs/apk/full/release/ || true
+
+      - name: 上传 Lite Release APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-lite-release
+          path: app/build/outputs/apk/lite/release/*.apk
+          if-no-files-found: warn
+
+      - name: 上传 Full Release APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-full-release
+          path: app/build/outputs/apk/full/release/*.apk
+          if-no-files-found: warn
+
+      - name: 上传 Debug APKs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+  release:
+    name: 发布 Release
+    needs: build
+    # 只有打 tag (v*) 或手动触发且在 main 分支时才发布，PR 不发布
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: 构建 Release 包
+        run: ./gradlew assembleLiteRelease assembleFullRelease --stacktrace
+
+      - name: 重命名 APK (带版本号)
+        run: |
+          mkdir -p release-apks
+          VERSION_NAME=$(grep -m1 versionName app/build.gradle | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "VERSION_NAME=${VERSION_NAME}" >> $GITHUB_ENV
+          echo "versionName: ${VERSION_NAME}"
+          cp app/build/outputs/apk/lite/release/app-lite-release.apk "release-apks/CLIProxyAPI-${VERSION_NAME}-lite.apk" || cp app/build/outputs/apk/lite/release/*.apk release-apks/
+          cp app/build/outputs/apk/full/release/app-full-release.apk "release-apks/CLIProxyAPI-${VERSION_NAME}-full.apk" || cp app/build/outputs/apk/full/release/*.apk release-apks/
+          ls -lh release-apks/
+
+      - name: 创建 GitHub Release 并上传 APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-apks/*.apk
+          generate_release_notes: true
+          body: |
+            ## 🚀 CLIProxyAPI for Android ${{ github.ref_name }}
+
+            - `*-lite.apk` (约1.2MB): 轻量版，首次启动按需下载核心组件
+            - `*-full.apk` (约50MB): 完整离线版，开箱即用
+
+            默认端口 `8317`，管理后台 `/management.html`
